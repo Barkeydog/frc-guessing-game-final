@@ -2,13 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>FRC Guessing Game</title>
+  <title>FRC Guess</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- favicon -->
+  <link rel="icon" href="first.png" type="image/png">
 
   <!-- Bootstrap 5 -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 
-  <!-- Firebase (compat SDKs so we can keep simple syntax) -->
+  <!-- Firebase (compat SDK) -->
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
@@ -27,7 +30,7 @@
 </head>
 <body class="bg-light">
   <div class="container">
-    <h1 class="text-center mb-4">FRC Guessing Game</h1>
+    <h1 class="text-center mb-4"><img src="/img/robot.png" alt="robot" style="height:1.6rem;margin-right:.4rem;">FRC Guessing Game</h1>
 
     <!-- Google auth buttons -->
     <div class="mb-3 text-center">
@@ -66,11 +69,12 @@
 /************************************
  *   CONFIGURATION & CONSTANTS      *
  ***********************************/
-// Calls go through Netlify Function proxy at /api → .netlify/functions/tba
+// Proxy path for Netlify Function
+afterDeploy = true; // placeholder flag so code isn't linted for unused var
 const API_PREFIX = '/api';
-const YEARS      = [2016, 2025];          // seasons to sample from
-const K          = 32;                    // ELO K‑factor
-const TIMER_S    = 10;                    // seconds to answer
+const YEARS      = [2016, 2025];
+const K          = 32;   // ELO
+const TIMER_S    = 10;   // seconds to answer
 
 /*************  Firebase  ***********/
 firebase.initializeApp({
@@ -86,14 +90,14 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 /*************  Global state  ***********/
-let countdown = null;                     // interval id
-let currentMatch = null;                  // TBA match json
-let answered    = false;                 // did user click
+let countdown = null;
+let currentMatch = null;
+let answered    = false;
 
-/*************  Simple caches ***********/
-const eventsCache  = new Map();           // year → events[]
-const matchesCache = new Map();           // eventKey → matches[]
-const avatarCache  = new Map();           // teamKey+year → url|null
+/*************  Caches  ***********/
+const eventsCache  = new Map();
+const matchesCache = new Map();
+const avatarCache  = new Map();
 
 /************************************
  *      AUTHENTICATION UI           *
@@ -123,37 +127,22 @@ auth.onAuthStateChanged(async user => {
 async function refreshLeaderboard(){
   const tbody = document.querySelector('#leaderboard-table tbody');
   tbody.innerHTML='';
-  const topSnap = await db.collection('users').orderBy('rating','desc').limit(10).get();
-  const rows=[]; let rank=1;
-  topSnap.forEach(doc=>rows.push({...doc.data(), uid:doc.id, rank:rank++}));
-
-  const me=auth.currentUser; let myRow=null;
-  if(me && !rows.find(r=>r.uid===me.uid)){
-    const meDoc = await db.collection('users').doc(me.uid).get();
-    if(meDoc.exists){
-      const r=meDoc.data().rating;
-      const above = await db.collection('users').where('rating','>',r).get();
-      myRow={name:meDoc.data().name,rating:r,uid:me.uid,rank:above.size+1};
-    }
-  }
-
-  for(const r of rows)
+  const snap = await db.collection('users').orderBy('rating','desc').limit(10).get();
+  let rank=1; const rows=[];
+  snap.forEach(d=>rows.push({...d.data(),uid:d.id,rank:rank++}));
+  const me=auth.currentUser;
+  rows.forEach(r=>{
     tbody.insertAdjacentHTML('beforeend',
       `<tr${r.uid===me?.uid?' class="table-primary"':''}><td>${r.rank}</td><td>${r.name}</td><td>${Math.round(r.rating)}</td></tr>`);
-
-  if(myRow){
-    tbody.insertAdjacentHTML('beforeend',
-      `<tr><td colspan="3" class="text-center">…</td></tr>
-       <tr class="table-primary"><td>${myRow.rank}</td><td>${myRow.name}</td><td>${Math.round(myRow.rating)}</td></tr>`);
-  }
+  });
 }
 
 async function updateElo(correct){
   const user=auth.currentUser; if(!user) return;
   const ref=db.collection('users').doc(user.uid);
   await db.runTransaction(async tx=>{
-    const snap=await tx.get(ref); if(!snap.exists) return;
-    const cur=snap.data().rating||1000;
+    const s=await tx.get(ref); if(!s.exists) return;
+    const cur=s.data().rating||1000;
     tx.update(ref,{rating:cur+K*((correct?1:0)-0.5)});
   });
   refreshLeaderboard();
@@ -163,23 +152,22 @@ async function updateElo(correct){
  *           GAME FLOW              *
  ***********************************/
 const newMatchBtn = document.getElementById('new-match');
-let waitForNew    = false;
-
+let coolDown = false;
 newMatchBtn.onclick = () => {
-  if(waitForNew) return;
-  waitForNew = true; newMatchBtn.disabled=true;
-  newMatch().finally(()=> setTimeout(()=>{waitForNew=false; newMatchBtn.disabled=false;}, 1200));
+  if(coolDown) return;
+  coolDown=true; newMatchBtn.disabled=true;
+  newMatch().finally(()=> setTimeout(()=>{coolDown=false; newMatchBtn.disabled=false;},1200));
 };
 
 async function newMatch(){
   resetUI();
   try{
-    const year = randBetween(...YEARS);
-    const event = randPick(await getEvents(year).then(ev=>ev.filter(e=>e.event_type<=1))); // Regionals & Districts
+    const year  = randBetween(...YEARS);
+    const event = randPick(await getEvents(year).then(e=>e.filter(ev=>ev.event_type<=1)));
     const match = randPick(await getMatches(event.key).then(m=>m.filter(v=>v.winning_alliance)));
     currentMatch = match;
     answered=false;
-    showMatch(event, match);
+    showMatch(event,match);
   }catch(err){
     console.error(err);
     alert('Blue Alliance error: '+err.message);
@@ -187,118 +175,98 @@ async function newMatch(){
 }
 
 function resetUI(){
-  if(countdown) clearInterval(countdown);
+  clearInterval(countdown);
   ['timer','meta','match-info','result-area'].forEach(id=>document.getElementById(id).innerHTML='');
   document.getElementById('leaderboard-card').classList.remove('win','lose');
 }
 
-function showMatch(event, match){
-  // meta line
-  const level = match.comp_level==='qm' ? 'Qualification' : match.comp_level.toUpperCase();
-  document.getElementById('meta').textContent = `${event.year} – ${event.name} – ${level} Match #${match.match_number}`;
+function showMatch(event,match){
+  const level=match.comp_level==='qm'?'Qualification':match.comp_level.toUpperCase();
+  document.getElementById('meta').textContent=`${event.year} – ${event.name} – ${level} #${match.match_number}`;
 
-  // render alliances
   const box=document.getElementById('match-info'); box.innerHTML='';
   ['red','blue'].forEach(color=>{
-    const teams = match.alliances[color].team_keys;
-    box.appendChild(renderAllianceCard(color, teams));
-    // load avatars async
+    const teams=match.alliances[color].team_keys;
+    box.appendChild(renderAllianceCard(color,teams));
     teams.forEach(async tk=>{
-      const url = await getAvatar(tk, event.year);
+      const url=await getAvatar(tk,event.year);
       if(url){ const img=document.getElementById(`img-${tk}`); if(img) img.src=url; }
     });
   });
-
-  // start timer
   startTimer();
 }
 
-function renderAllianceCard(color, teams){
-  const html = teams.map(tk=>`<div class="team"><img id="img-${tk}" src="https://www.thebluealliance.com/images/team_avatar_placeholder.png" alt="${tk.slice(3)}"><span>${tk.slice(3)}</span></div>`).join('');
-  const col = document.createElement('div'); col.className='col-md-6';
-  col.innerHTML = `
-    <div class="card shadow-sm" data-color="${color}">
-      <div class="card-body">
-        <h4 class="card-title text-capitalize mb-3">${color} alliance</h4>
-        <div class="team-list">${html}</div>
-      </div>
-    </div>`;
-  col.querySelector('.card').onclick = () => guess(color);
-  return col;
+function renderAllianceCard(color,teams){
+  const cards=teams.map(tk=>`<div class="team"><img id="img-${tk}" src="/img/placeholder.png" onerror="this.src='/img/placeholder.png'" alt="${tk.slice(3)}"><span>${tk.slice(3)}</span></div>`).join('');
+  const div=document.createElement('div'); div.className='col-md-6';
+  div.innerHTML=`<div class="card shadow-sm" data-color="${color}"><div class="card-body"><h4 class="card-title text-capitalize mb-3">${color} alliance</h4><div class="team-list">${cards}</div></div></div>`;
+  div.querySelector('.card').onclick=()=>guess(color);
+  return div;
 }
 
 function startTimer(){
-  let t = TIMER_S;
-  const timerElm = document.getElementById('timer');
-  timerElm.textContent = `${t}s`;
-  countdown = setInterval(()=>{
-    t--; timerElm.textContent=`${t}s`;
-    if(t<=0){ clearInterval(countdown); guess(null); }
-  },1000);
+  let t=TIMER_S; const elm=document.getElementById('timer'); elm.textContent=`${t}s`;
+  countdown=setInterval(()=>{ if(--t<=0){clearInterval(countdown); guess(null);} elm.textContent=`${t}s`; },1000);
 }
 
 function guess(color){
-  if(answered) return; answered=true;
-  if(countdown) clearInterval(countdown);
-
-  const winner = currentMatch.winning_alliance; // 'red' | 'blue'
-  // highlight cards
-  document.querySelectorAll('#match-info .card').forEach(card=>{
-    const isWinner = card.getAttribute('data-color')===winner;
-    card.classList.add(isWinner?'win':'lose');
-  });
+  if(answered) return; answered=true; clearInterval(countdown);
+  const winner=currentMatch.winning_alliance;
+  document.querySelectorAll('#match-info .card').forEach(card=>{ card.classList.add(card.getAttribute('data-color')===winner?'win':'lose'); });
   document.getElementById('leaderboard-card').classList.add(color===winner?'win':'lose');
-
-  // result text
-  const correct = color===winner; // color==null => false
-  const resElm=document.getElementById('result-area');
-  resElm.innerHTML = `<h3>${correct?'Correct!':'Time\u2019s up—Wrong!'}</h3>
-    <p>Final Score – Red: ${currentMatch.alliances.red.score} | Blue: ${currentMatch.alliances.blue.score}</p>
-    <a href="https://www.thebluealliance.com/match/${currentMatch.key}" target="_blank">Match details & video</a>`;
-
+  const correct=color===winner;
+  document.getElementById('result-area').innerHTML=`<h3>${correct?'Correct!':'Wrong or Timeout!'}</h3><p>Red: ${currentMatch.alliances.red.score} | Blue: ${currentMatch.alliances.blue.score}</p><a target="_blank" href="https://www.thebluealliance.com/match/${currentMatch.key}">Match details & video</a>`;
   updateElo(correct);
 }
 
 /************************************
  *         BLUE ALLIANCE API        *
  ***********************************/
-// index.html  – replace the helper
-async function tba(endpoint) {
-  const res = await fetch(`/.netlify/functions/tba?path=${endpoint}`);
-  if (!res.ok) throw new Error(`TBA error ${res.status}`);
+async function tba(endpoint){
+  const res=await fetch(`/.
+netlify/functions/tba?path=${endpoint}`);
+  if(!res.ok) throw new Error(res.statusText);
   return res.json();
 }
 
-
 function getEvents(year){
   if(eventsCache.has(year)) return Promise.resolve(eventsCache.get(year));
-  return tba(`/events/${year}`).then(data=>{ eventsCache.set(year,data); return data; });
+  return tba(`/events/${year}`).then(d=>{eventsCache.set(year,d); return d;});
 }
 
 function getMatches(eventKey){
   if(matchesCache.has(eventKey)) return Promise.resolve(matchesCache.get(eventKey));
-  return tba(`/event/${eventKey}/matches`).then(m=>{ matchesCache.set(eventKey,m); return m; });
+  return tba(`/event/${eventKey}/matches`).then(d=>{matchesCache.set(eventKey,d); return d;});
 }
 
-async function getAvatar(teamKey, year){
-  const id=`${teamKey}-${year}`;
-  if(avatarCache.has(id)) return avatarCache.get(id);
-  try{
-    const media = await tba(`/team/${teamKey}/media/${year}`);
-    const avatar = media.find(m=>m.type==='avatar');
-    const url = avatar ? avatar.details.base64Image : null;
-    const finalUrl = url ? `data:image/png;base64,${url}` : null;
-    avatarCache.set(id, finalUrl);
-    return finalUrl;
-  }catch(e){ avatarCache.set(id,null); return null; }
+// Smarter avatar lookup – fall back to later seasons until found
+async function getAvatar(teamKey, startYear){
+  const cacheKey=`${teamKey}-${startYear}`;
+  if(avatarCache.has(cacheKey)) return avatarCache.get(cacheKey);
+
+  const seasons=[startYear];
+  for(let y=2025; y>=2016; y--){ if(!seasons.includes(y)) seasons.push(y); }
+
+  for(const yr of seasons){
+    try{
+      const media=await tba(`/team/${teamKey}/media/${yr}`);
+      const avatar=media.find(m=>m.type==='avatar' && m.details?.base64Image);
+      if(avatar){
+        const url=`data:image/png;base64,${avatar.details.base64Image}`;
+        avatarCache.set(cacheKey,url);
+        return url;
+      }
+    }catch(e){/* ignore transient errors*/}
+  }
+  avatarCache.set(cacheKey,null);
+  return null;
 }
 
 /************************************
  *            UTILITIES             *
  ***********************************/
-function randPick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
-function randBetween(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
-
+function randPick(arr){return arr[Math.floor(Math.random()*arr.length)];}
+function randBetween(min,max){return Math.floor(Math.random()*(max-min+1))+min;}
 </script>
 </body>
 </html>
