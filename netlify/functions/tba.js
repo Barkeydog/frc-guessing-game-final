@@ -3,7 +3,7 @@ export const handler = async (event) => {
   const raw  = event.queryStringParameters.path || "";
   const path = raw.startsWith("/") ? raw : "/" + raw;
 
-  const url  = "https://www.thebluealliance.com/api/v3" + path;
+  const url = "https://www.thebluealliance.com/api/v3" + event.queryStringParameters.path;        // already starts with '/'
   console.log("➡️  TBA →", url);
 
   const resp = await fetch(url, {
