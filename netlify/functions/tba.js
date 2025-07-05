@@ -4,7 +4,7 @@ export const handler = async (event) => {
 
   const url = "https://www.thebluealliance.com/api/v3" + path;
   console.log("➡️  TBA →", url);             // should log “…/api/v3/events/2023”
-
+  console.log("➡️  Calling TBA:", url);
   const resp = await fetch(url, {
     headers: {
       "X-TBA-Auth-Key": process.env.TBA_KEY,
