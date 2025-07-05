@@ -1,10 +1,9 @@
 export const handler = async (event) => {
-  // ensure path starts with exactly one slash
-  const raw  = event.queryStringParameters.path || "";
-  const path = raw.startsWith("/") ? raw : "/" + raw;
+  const rawPath = event.queryStringParameters.path || "";   // "events/2023"
+  const path    = rawPath.startsWith("/") ? rawPath : "/" + rawPath;
 
-  const url = "https://www.thebluealliance.com/api/v3" + event.queryStringParameters.path;        // already starts with '/'
-  console.log("➡️  TBA →", url);
+  const url = "https://www.thebluealliance.com/api/v3" + path;
+  console.log("➡️  TBA →", url);             // should log “…/api/v3/events/2023”
 
   const resp = await fetch(url, {
     headers: {

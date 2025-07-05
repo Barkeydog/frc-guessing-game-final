@@ -3,5 +3,5 @@
 
 [[redirects]]
   from   = "/api/*"
-  to     = "/.netlify/functions/tba?path=/:splat"   # ⬅️  leading slash here
+  to     = "/.netlify/functions/tba?path=:splat"   # ⬅️  NO leading slash  here
   status = 200
