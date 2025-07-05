@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FRC Guessing Game</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Firebase (compat SDKs so we can keep simple syntax) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+
+  <style>
+    body        { padding-top:4rem; }
+    .card       { cursor:pointer; transition:transform .2s; }
+    .card:hover { transform:scale(1.05); }
+    .win        { background-color:#d4edda!important; }
+    .lose       { background-color:#f8d7da!important; }
+    .team-list  { display:flex; justify-content:center; gap:.75rem; flex-wrap:wrap; }
+    .team       { display:flex; flex-direction:column; align-items:center; width:80px; }
+    .team img   { width:60px; height:60px; object-fit:contain; border:1px solid #dee2e6; border-radius:.5rem; background:#fff; }
+    .team span  { font-size:.85rem; margin-top:.25rem; }
+  </style>
+</head>
+<body class="bg-light">
+  <div class="container">
+    <h1 class="text-center mb-4">FRC Guessing Game</h1>
+
+    <!-- Google auth buttons -->
+    <div class="mb-3 text-center">
+      <button id="sign-in"  class="btn btn-outline-primary">Sign in with Google</button>
+      <button id="sign-out" class="btn btn-outline-secondary d-none">Sign out</button>
+      <span   id="user-info" class="ms-2 fst-italic"></span>
+    </div>
+
+    <!-- Game controls -->
+    <div class="text-center">
+      <p class="lead">Click “New Match” to guess which alliance wins!</p>
+      <button id="new-match" class="btn btn-primary mb-3">New Match</button>
+
+      <!-- Match meta + countdown -->
+      <p    id="meta"   class="h5 mb-2"></p>
+      <div  id="timer"  class="h4 text-danger fw-bold mb-2"></div>
+      <div  id="match-info" class="row g-3"></div>
+    </div>
+
+    <!-- Result area -->
+    <div id="result-area" class="text-center mt-4"></div>
+
+    <!-- Leaderboard -->
+    <div class="card mt-4" id="leaderboard-card">
+      <div class="card-body">
+        <h4 class="card-title">Leaderboard</h4>
+        <table class="table table-sm" id="leaderboard-table">
+          <thead><tr><th>#</th><th>Name</th><th>ELO</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+/************************************
+ *   CONFIGURATION & CONSTANTS      *
+ ***********************************/
+// Calls go through Netlify Function proxy at /api → .netlify/functions/tba
+const API_PREFIX = '/api';
+const YEARS      = [2016, 2025];          // seasons to sample from
+const K          = 32;                    // ELO K‑factor
+const TIMER_S    = 10;                    // seconds to answer
+
+/*************  Firebase  ***********/
+firebase.initializeApp({
+  apiKey:            "AIzaSyC8Gb6f8z3RLrVKuHyWd3TyC9EgQG9oEng",
+  authDomain:        "hosting-d2c1e.firebaseapp.com",
+  projectId:         "hosting-d2c1e",
+  storageBucket:     "hosting-d2c1e.appspot.com",
+  messagingSenderId: "756373908988",
+  appId:             "1:756373908988:web:702d27d6cc8fedb132d679",
+  measurementId:     "G-6XE6JF3W6F"
+});
+const auth = firebase.auth();
+const db   = firebase.firestore();
+
+/*************  Global state  ***********/
+let countdown = null;                     // interval id
+let currentMatch = null;                  // TBA match json
+let answered    = false;                 // did user click
+
+/*************  Simple caches ***********/
+const eventsCache  = new Map();           // year → events[]
+const matchesCache = new Map();           // eventKey → matches[]
+const avatarCache  = new Map();           // teamKey+year → url|null
+
+/************************************
+ *      AUTHENTICATION UI           *
+ ***********************************/
+const signInBtn  = document.getElementById('sign-in');
+const signOutBtn = document.getElementById('sign-out');
+const userInfo   = document.getElementById('user-info');
+
+signInBtn.onclick  = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(e=>alert(e.message));
+signOutBtn.onclick = () => auth.signOut();
+
+auth.onAuthStateChanged(async user => {
+  signInBtn.classList.toggle('d-none', !!user);
+  signOutBtn.classList.toggle('d-none', !user);
+  userInfo.textContent = user ? user.displayName : '';
+
+  if (user) {
+    const ref = db.collection('users').doc(user.uid);
+    if (!(await ref.get()).exists) await ref.set({ name:user.displayName, rating:1000 });
+  }
+  refreshLeaderboard();
+});
+
+/************************************
+ *         LEADERBOARD              *
+ ***********************************/
+async function refreshLeaderboard(){
+  const tbody = document.querySelector('#leaderboard-table tbody');
+  tbody.innerHTML='';
+  const topSnap = await db.collection('users').orderBy('rating','desc').limit(10).get();
+  const rows=[]; let rank=1;
+  topSnap.forEach(doc=>rows.push({...doc.data(), uid:doc.id, rank:rank++}));
+
+  const me=auth.currentUser; let myRow=null;
+  if(me && !rows.find(r=>r.uid===me.uid)){
+    const meDoc = await db.collection('users').doc(me.uid).get();
+    if(meDoc.exists){
+      const r=meDoc.data().rating;
+      const above = await db.collection('users').where('rating','>',r).get();
+      myRow={name:meDoc.data().name,rating:r,uid:me.uid,rank:above.size+1};
+    }
+  }
+
+  for(const r of rows)
+    tbody.insertAdjacentHTML('beforeend',
+      `<tr${r.uid===me?.uid?' class="table-primary"':''}><td>${r.rank}</td><td>${r.name}</td><td>${Math.round(r.rating)}</td></tr>`);
+
+  if(myRow){
+    tbody.insertAdjacentHTML('beforeend',
+      `<tr><td colspan="3" class="text-center">…</td></tr>
+       <tr class="table-primary"><td>${myRow.rank}</td><td>${myRow.name}</td><td>${Math.round(myRow.rating)}</td></tr>`);
+  }
+}
+
+async function updateElo(correct){
+  const user=auth.currentUser; if(!user) return;
+  const ref=db.collection('users').doc(user.uid);
+  await db.runTransaction(async tx=>{
+    const snap=await tx.get(ref); if(!snap.exists) return;
+    const cur=snap.data().rating||1000;
+    tx.update(ref,{rating:cur+K*((correct?1:0)-0.5)});
+  });
+  refreshLeaderboard();
+}
+
+/************************************
+ *           GAME FLOW              *
+ ***********************************/
+const newMatchBtn = document.getElementById('new-match');
+let waitForNew    = false;
+
+newMatchBtn.onclick = () => {
+  if(waitForNew) return;
+  waitForNew = true; newMatchBtn.disabled=true;
+  newMatch().finally(()=> setTimeout(()=>{waitForNew=false; newMatchBtn.disabled=false;}, 1200));
+};
+
+async function newMatch(){
+  resetUI();
+  try{
+    const year = randBetween(...YEARS);
+    const event = randPick(await getEvents(year).then(ev=>ev.filter(e=>e.event_type<=1))); // Regionals & Districts
+    const match = randPick(await getMatches(event.key).then(m=>m.filter(v=>v.winning_alliance)));
+    currentMatch = match;
+    answered=false;
+    showMatch(event, match);
+  }catch(err){
+    console.error(err);
+    alert('Blue Alliance error: '+err.message);
+  }
+}
+
+function resetUI(){
+  if(countdown) clearInterval(countdown);
+  ['timer','meta','match-info','result-area'].forEach(id=>document.getElementById(id).innerHTML='');
+  document.getElementById('leaderboard-card').classList.remove('win','lose');
+}
+
+function showMatch(event, match){
+  // meta line
+  const level = match.comp_level==='qm' ? 'Qualification' : match.comp_level.toUpperCase();
+  document.getElementById('meta').textContent = `${event.year} – ${event.name} – ${level} Match #${match.match_number}`;
+
+  // render alliances
+  const box=document.getElementById('match-info'); box.innerHTML='';
+  ['red','blue'].forEach(color=>{
+    const teams = match.alliances[color].team_keys;
+    box.appendChild(renderAllianceCard(color, teams));
+    // load avatars async
+    teams.forEach(async tk=>{
+      const url = await getAvatar(tk, event.year);
+      if(url){ const img=document.getElementById(`img-${tk}`); if(img) img.src=url; }
+    });
+  });
+
+  // start timer
+  startTimer();
+}
+
+function renderAllianceCard(color, teams){
+  const html = teams.map(tk=>`<div class="team"><img id="img-${tk}" src="https://www.thebluealliance.com/images/team_avatar_placeholder.png" alt="${tk.slice(3)}"><span>${tk.slice(3)}</span></div>`).join('');
+  const col = document.createElement('div'); col.className='col-md-6';
+  col.innerHTML = `
+    <div class="card shadow-sm" data-color="${color}">
+      <div class="card-body">
+        <h4 class="card-title text-capitalize mb-3">${color} alliance</h4>
+        <div class="team-list">${html}</div>
+      </div>
+    </div>`;
+  col.querySelector('.card').onclick = () => guess(color);
+  return col;
+}
+
+function startTimer(){
+  let t = TIMER_S;
+  const timerElm = document.getElementById('timer');
+  timerElm.textContent = `${t}s`;
+  countdown = setInterval(()=>{
+    t--; timerElm.textContent=`${t}s`;
+    if(t<=0){ clearInterval(countdown); guess(null); }
+  },1000);
+}
+
+function guess(color){
+  if(answered) return; answered=true;
+  if(countdown) clearInterval(countdown);
+
+  const winner = currentMatch.winning_alliance; // 'red' | 'blue'
+  // highlight cards
+  document.querySelectorAll('#match-info .card').forEach(card=>{
+    const isWinner = card.getAttribute('data-color')===winner;
+    card.classList.add(isWinner?'win':'lose');
+  });
+  document.getElementById('leaderboard-card').classList.add(color===winner?'win':'lose');
+
+  // result text
+  const correct = color===winner; // color==null => false
+  const resElm=document.getElementById('result-area');
+  resElm.innerHTML = `<h3>${correct?'Correct!':'Time\u2019s up—Wrong!'}</h3>
+    <p>Final Score – Red: ${currentMatch.alliances.red.score} | Blue: ${currentMatch.alliances.blue.score}</p>
+    <a href="https://www.thebluealliance.com/match/${currentMatch.key}" target="_blank">Match details & video</a>`;
+
+  updateElo(correct);
+}
+
+/************************************
+ *         BLUE ALLIANCE API        *
+ ***********************************/
+async function tba(endpoint){
+  const res = await fetch(`${API_PREFIX}${endpoint}`);
+  if(!res.ok) throw new Error(res.statusText);
+  return res.json();
+}
+
+function getEvents(year){
+  if(eventsCache.has(year)) return Promise.resolve(eventsCache.get(year));
+  return tba(`/events/${year}`).then(data=>{ eventsCache.set(year,data); return data; });
+}
+
+function getMatches(eventKey){
+  if(matchesCache.has(eventKey)) return Promise.resolve(matchesCache.get(eventKey));
+  return tba(`/event/${eventKey}/matches`).then(m=>{ matchesCache.set(eventKey,m); return m; });
+}
+
+async function getAvatar(teamKey, year){
+  const id=`${teamKey}-${year}`;
+  if(avatarCache.has(id)) return avatarCache.get(id);
+  try{
+    const media = await tba(`/team/${teamKey}/media/${year}`);
+    const avatar = media.find(m=>m.type==='avatar');
+    const url = avatar ? avatar.details.base64Image : null;
+    const finalUrl = url ? `data:image/png;base64,${url}` : null;
+    avatarCache.set(id, finalUrl);
+    return finalUrl;
+  }catch(e){ avatarCache.set(id,null); return null; }
+}
+
+/************************************
+ *            UTILITIES             *
+ ***********************************/
+function randPick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function randBetween(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+
+</script>
+</body>
+</html>
