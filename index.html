@@ -262,11 +262,13 @@ function guess(color){
 /************************************
  *         BLUE ALLIANCE API        *
  ***********************************/
-async function tba(endpoint){
-  const res = await fetch(`${API_PREFIX}${endpoint}`);
-  if(!res.ok) throw new Error(res.statusText);
+// index.html  – replace the helper
+async function tba(endpoint) {
+  const res = await fetch(`/.netlify/functions/tba?path=${endpoint}`);
+  if (!res.ok) throw new Error(`TBA error ${res.status}`);
   return res.json();
 }
+
 
 function getEvents(year){
   if(eventsCache.has(year)) return Promise.resolve(eventsCache.get(year));
