@@ -68,10 +68,10 @@
 
 <script>
 /* ---------- CONFIG ---------- */
-const API_PREFIX  = "/.netlify/functions/tba?path=";   // Netlify proxy
+const API_PREFIX  = "/.netlify/functions/tba?path=";
 const YEARS       = [2016, 2025];
-const K           = 32;    // Elo K-factor
-const TIMER_S     = 10;    // seconds per round
+const K           = 32;
+const TIMER_S     = 10;
 const PLACEHOLDER = "logo.png";
 
 /* ---------- Firebase ---------- */
@@ -154,15 +154,23 @@ newMatchBtn.onclick = () => {
 async function newMatch() {
   resetUI();
   try {
-    const year  = randBetween(...YEARS);
-    const event = randPick((await getEvents(year)).filter(e => e.event_type <= 1));
-    const match = randPick((await getMatches(event.key)).filter(m => m.winning_alliance));
+    const year = randBetween(...YEARS);
+    const events = await getEvents(year);
+    if (!events || !events.length) throw new Error(`No events for ${year}.`);
 
-    currentMatch = match; answered = false;
-    showMatch(event, match);
+    const event = randPick(events.filter(e => e.event_type <= 1));
+    if (!event) throw new Error('No suitable event found.');
+
+    const matches = await getMatches(event.key);
+    const filtered = matches.filter(m => m.winning_alliance && m.comp_level);
+    if (!filtered.length) throw new Error('No valid matches in this event.');
+
+    currentMatch = randPick(filtered);
+    answered = false;
+    showMatch(event, currentMatch);
   } catch (err) {
     console.error(err);
-    alert("Blue Alliance error: " + err.message);
+    alert('Error loading match: ' + err.message);
   }
 }
 
@@ -174,7 +182,7 @@ function resetUI() {
 
 function showMatch(event, match) {
   document.getElementById("meta").textContent =
-    `${event.year} – ${event.name} – ${match.comp_level === "qm" ? "Qualification" : match.comp_level.toUpperCase()} #${match.match_number}`;
+    `${event.year} – ${event.name} – ${(match.comp_level?.toUpperCase() || "Unknown")} #${match.match_number}`;
 
   const box = document.getElementById("match-info");
   box.innerHTML = "";
@@ -226,7 +234,7 @@ function startTimer() {
   const timerElm = document.getElementById("timer");
   timerElm.textContent = `${t}s`;
   countdown = setInterval(() => {
-    if (--t <= 0) { clearInterval(countdown); guess(null, true); } // timeout flag
+    if (--t <= 0) { clearInterval(countdown); guess(null, true); }
     timerElm.textContent = `${t}s`;
   }, 1000);
 }
