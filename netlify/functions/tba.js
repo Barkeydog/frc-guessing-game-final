@@ -1,8 +1,4 @@
-/* netlify/functions/tba.js
-   Proxy to The Blue Alliance using Netlify Function.
-   Requires env var TBA_KEY.
-   Works on Node 18+ (global fetch). */
-
+// netlify/functions/tba.js
 export const handler = async (event) => {
   const endpoint = event.queryStringParameters.path || "/";
   const url = "https://www.thebluealliance.com/api/v3" + endpoint;
