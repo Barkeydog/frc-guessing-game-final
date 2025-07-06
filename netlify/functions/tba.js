@@ -1,15 +1,17 @@
-import fetch from "node-fetch";
+/* netlify/functions/tba.js
+   Proxy to The Blue Alliance using Netlify Function.
+   Requires env var TBA_KEY.
+   Works on Node 18+ (global fetch). */
 
 export const handler = async (event) => {
-  // path supplied via redirect, already has leading /
   const endpoint = event.queryStringParameters.path || "/";
-  const url      = "https://www.thebluealliance.com/api/v3" + endpoint;
+  const url = "https://www.thebluealliance.com/api/v3" + endpoint;
 
   try {
     const resp = await fetch(url, {
       headers: {
         "X-TBA-Auth-Key": process.env.TBA_KEY,
-        "User-Agent":     "frc-guess-proxy"
+        "User-Agent": "frc-guess-proxy"
       }
     });
 
@@ -22,6 +24,6 @@ export const handler = async (event) => {
       body: await resp.text()
     };
   } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
+    return { statusCode: 502, body: JSON.stringify({ error: err.message }) };
   }
 };
