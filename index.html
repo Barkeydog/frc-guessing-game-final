@@ -120,15 +120,22 @@ async function refreshLeaderboard() {
          </tr>`);
     });
 }
-async function updateElo(correct){
-  const user=auth.currentUser; if(!user)return;
+async function updateElo(correct) {
+  const user = auth.currentUser;
+  if (!user || !db) return;
+
   const ref = db.collection("users").doc(user.uid);
-  await db.runTransaction(async tx=>{
-    const snap=await tx.get(ref); if(!snap.exists)return;
-    const cur=snap.data().rating||1000;
-    tx.update(ref,{rating:cur+K*((correct?1:0)-0.5)});
-  });
-  refreshLeaderboard();
+  try {
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      const cur  = snap.exists ? (snap.data().rating || 1000) : 1000;
+      tx.set(ref, { name: user.displayName, rating: cur + K * ((correct?1:0) - 0.5) });
+    });
+    refreshLeaderboard();
+  } catch (err) {
+    console.error("ELO update failed:", err.message);
+    alert("Failed to update leaderboard – check Firestore rules.");
+  }
 }
 
 /*** Game flow ***/
