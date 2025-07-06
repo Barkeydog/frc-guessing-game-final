@@ -1,23 +1,27 @@
+import fetch from "node-fetch";
+
 export const handler = async (event) => {
-  const rawPath = event.queryStringParameters.path || "";   // "events/2023"
-  const path    = rawPath.startsWith("/") ? rawPath : "/" + rawPath;
+  // path supplied via redirect, already has leading /
+  const endpoint = event.queryStringParameters.path || "/";
+  const url      = "https://www.thebluealliance.com/api/v3" + endpoint;
 
-  const url = "https://www.thebluealliance.com/api/v3" + path;
-  console.log("➡️  TBA →", url);             // should log “…/api/v3/events/2023”
-  console.log("➡️  Calling TBA:", url);
-  const resp = await fetch(url, {
-    headers: {
-      "X-TBA-Auth-Key": process.env.TBA_KEY,
-      "User-Agent":     "frc-guessing-game"
-    }
-  });
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        "X-TBA-Auth-Key": process.env.TBA_KEY,
+        "User-Agent":     "frc-guess-proxy"
+      }
+    });
 
-  return {
-    statusCode: resp.status,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Content-Type": "application/json"
-    },
-    body: await resp.text()
-  };
+    return {
+      statusCode: resp.status,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Content-Type": "application/json"
+      },
+      body: await resp.text()
+    };
+  } catch (err) {
+    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
+  }
 };

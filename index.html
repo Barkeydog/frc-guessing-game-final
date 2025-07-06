@@ -6,20 +6,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="first.png" type="image/png" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+
+  <!-- Firebase compat SDKs (actual config pulled at runtime) -->
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 
   <style>
-    body { padding-top: 4rem; }
-    .card { cursor: pointer; transition: transform .2s; }
-    .card:hover { transform: scale(1.05); }
-    .win  { background-color: #d4edda !important; }
-    .lose { background-color: #f8d7da !important; }
-    .team-list { display: flex; justify-content: center; gap: .75rem; flex-wrap: wrap; }
-    .team { display: flex; flex-direction: column; align-items: center; width: 80px; }
-    .team img { width: 60px; height: 60px; object-fit: contain; border: 1px solid #dee2e6; border-radius: .5rem; background: #fff; }
-    .team span { font-size: .85rem; margin-top: .25rem; }
+    body        { padding-top:4rem; }
+    .card       { cursor:pointer; transition:transform .2s; }
+    .card:hover { transform:scale(1.05); }
+    .win  { background:#d4edda!important; }
+    .lose { background:#f8d7da!important; }
+    .team-list{display:flex;justify-content:center;gap:.75rem;flex-wrap:wrap}
+    .team{display:flex;flex-direction:column;align-items:center;width:80px}
+    .team img{width:60px;height:60px;object-fit:contain;border:1px solid #dee2e6;
+              border-radius:.5rem;background:#fff}
+    .team span{font-size:.85rem;margin-top:.25rem}
   </style>
 </head>
 <body class="bg-light">
@@ -27,17 +30,18 @@
   <h1 class="text-center mb-4">FRC Guess</h1>
 
   <div class="mb-3 text-center">
-    <button id="sign-in" class="btn btn-outline-primary">Sign in with Google</button>
+    <button id="sign-in"  class="btn btn-outline-primary">Sign in with Google</button>
     <button id="sign-out" class="btn btn-outline-secondary d-none">Sign out</button>
-    <span id="user-info" class="ms-2 fst-italic"></span>
+    <span   id="user-info" class="ms-2 fst-italic"></span>
   </div>
 
   <div class="text-center">
     <p class="lead">Click “New Match” to guess which alliance wins!</p>
     <button id="new-match" class="btn btn-primary mb-3">New Match</button>
-    <p id="meta" class="h5 mb-2"></p>
-    <div id="timer" class="h4 text-danger fw-bold mb-2"></div>
-    <div id="match-info" class="row g-3"></div>
+
+    <p    id="meta"  class="h5 mb-2"></p>
+    <div  id="timer" class="h4 text-danger fw-bold mb-2"></div>
+    <div  id="match-info" class="row g-3"></div>
   </div>
 
   <div id="result-area" class="text-center mt-4"></div>
@@ -46,163 +50,143 @@
     <div class="card-body">
       <h4 class="card-title">Leaderboard</h4>
       <table class="table table-sm" id="leaderboard-table">
-        <thead><tr><th>#</th><th>Name</th><th>ELO</th></tr></thead>
-        <tbody></tbody>
+        <thead><tr><th>#</th><th>Name</th><th>ELO</th></tr></thead><tbody></tbody>
       </table>
     </div>
   </div>
 </div>
 
 <script>
-const API_PREFIX = "/.netlify/functions/tba?path=";
-const YEARS = [2016, 2017, 2018, 2019, 2020, 2022, 2023, 2024, 2025];
-const K = 32;
-const TIMER_S = 10;
+/* ---------- CONFIG (static) ---------- */
+const API_PREFIX  = "/.netlify/functions/tba?path=";
+const YEARS       = [2016,2017,2018,2019,2020,2022,2023,2024,2025]; // 2021 removed
+const K           = 32;
+const TIMER_S     = 10;
 const PLACEHOLDER = "logo.png";
 
-let firebaseApp, auth, db;
-let countdown = null, currentMatch = null, answered = false;
-const eventsCache = new Map();
-const matchesCache = new Map();
-const avatarCache = new Map();
-
-/* Fetch Firebase config from serverless function */
-fetch("/.netlify/functions/config")
+/* ---------- Firebase: loaded from serverless fn ---------- */
+let auth, db;
+fetch("/.netlify/functions/firebase-config")
   .then(r => r.json())
   .then(cfg => {
-    initFirebase(cfg.FIREBASE_API_KEY);
-    setupAuthListeners();
+      firebase.initializeApp(cfg);
+      auth = firebase.auth();
+      db   = firebase.firestore();
+      afterFirebaseReady();
   })
-  .catch(e => alert("Failed to load Firebase config: " + e.message));
+  .catch(e => { console.error(e); alert("Firebase config error"); });
 
-function initFirebase(apiKey) {
-  firebaseApp = firebase.initializeApp({
-    apiKey,
-    authDomain: "hosting-d2c1e.firebaseapp.com",
-    projectId: "hosting-d2c1e",
-    storageBucket: "hosting-d2c1e.appspot.com",
-    messagingSenderId: "756373908988",
-    appId: "1:756373908988:web:702d27d6cc8fedb132d679"
-  });
-  auth = firebase.auth();
-  db = firebase.firestore();
-}
+/* ---------- main logic after Firebase is ready ---------- */
+function afterFirebaseReady() {
 
-function setupAuthListeners() {
-  document.getElementById("sign-in").onclick = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(e => alert(e.message));
-  document.getElementById("sign-out").onclick = () => auth.signOut();
+/*** Global state & caches ***/
+let countdown = null, currentMatch = null, answered = false;
+const eventsCache  = new Map();
+const matchesCache = new Map();
+const avatarCache  = new Map();
 
-  auth.onAuthStateChanged(async user => {
-    document.getElementById("sign-in").classList.toggle("d-none", !!user);
-    document.getElementById("sign-out").classList.toggle("d-none", !user);
-    document.getElementById("user-info").textContent = user ? user.displayName : "";
-    if (user) {
-      const ref = db.collection("users").doc(user.uid);
-      if (!(await ref.get()).exists) await ref.set({ name: user.displayName, rating: 1000 });
-    }
-    refreshLeaderboard();
-  });
-}
+/*** Auth UI ***/
+const signInBtn  = document.getElementById("sign-in");
+const signOutBtn = document.getElementById("sign-out");
+const userInfo   = document.getElementById("user-info");
 
+signInBtn.onclick  = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(alert);
+signOutBtn.onclick = () => auth.signOut();
+
+auth.onAuthStateChanged(async user => {
+  signInBtn.classList.toggle("d-none", !!user);
+  signOutBtn.classList.toggle("d-none", !user);
+  userInfo.textContent = user ? user.displayName : "";
+
+  if (user) {
+    const ref = db.collection("users").doc(user.uid);
+    if (!(await ref.get()).exists) await ref.set({ name:user.displayName, rating:1000 });
+  }
+  refreshLeaderboard();
+});
+
+/*** Leaderboard ***/
 async function refreshLeaderboard() {
   const tbody = document.querySelector("#leaderboard-table tbody");
   tbody.innerHTML = "";
   const me = auth.currentUser;
   let rank = 1;
-  (await db.collection("users").orderBy("rating", "desc").limit(10).get())
-    .forEach(doc => {
+  (await db.collection("users").orderBy("rating","desc").limit(10).get())
+    .forEach(doc=>{
       const d = doc.data();
       tbody.insertAdjacentHTML("beforeend",
-        `<tr${doc.id === me?.uid ? ' class="table-primary"' : ''}>
+        `<tr${doc.id===me?.uid?' class="table-primary"':''}>
            <td>${rank++}</td><td>${d.name}</td><td>${Math.round(d.rating)}</td>
          </tr>`);
     });
 }
-
-async function updateElo(correct) {
-  const user = auth.currentUser; if (!user) return;
+async function updateElo(correct){
+  const user=auth.currentUser; if(!user)return;
   const ref = db.collection("users").doc(user.uid);
-  await db.runTransaction(async tx => {
-    const s = await tx.get(ref); if (!s.exists) return;
-    const cur = s.data().rating || 1000;
-    tx.update(ref, { rating: cur + K * ((correct ? 1 : 0) - 0.5) });
+  await db.runTransaction(async tx=>{
+    const snap=await tx.get(ref); if(!snap.exists)return;
+    const cur=snap.data().rating||1000;
+    tx.update(ref,{rating:cur+K*((correct?1:0)-0.5)});
   });
   refreshLeaderboard();
 }
 
-document.getElementById("new-match").onclick = () => {
-  if (document.getElementById("new-match").disabled) return;
-  document.getElementById("new-match").disabled = true;
-  newMatch().finally(() => setTimeout(() => document.getElementById("new-match").disabled = false, 1200));
-};
-
-async function newMatch() {
+/*** Game flow ***/
+document.getElementById("new-match").onclick = newMatch;
+async function newMatch(){
   resetUI();
-  try {
-    const year = randPick(YEARS);
+  try{
+    const year   = randBetween(...YEARS);
     const events = await getEvents(year);
-    if (!events || !events.length) throw new Error(`No events for ${year}.`);
+    if(!events.length) throw new Error(`No events for ${year}`);
 
-    const candidates = shuffle(events.filter(e => e.event_type <= 1));
-    if (!candidates.length) throw new Error('No suitable events in this year.');
+    const shuffled = shuffle(events.filter(e=>e.event_type<=1));
+    let pickedEvent=null, match=null;
 
-    let foundMatch = false;
-    for (const event of candidates) {
-      const matches = await getMatches(event.key);
-      const valid = matches.filter(m => m.winning_alliance && m.comp_level);
-      if (valid.length) {
-        currentMatch = randPick(valid);
-        answered = false;
-        showMatch(event, currentMatch);
-        foundMatch = true;
-        break;
-      }
+    for(const ev of shuffled){
+      const matches = await getMatches(ev.key);
+      const valid   = matches.filter(m=>m.winning_alliance && m.comp_level);
+      if(valid.length){ pickedEvent=ev; match=randPick(valid); break; }
     }
-    if (!foundMatch) throw new Error(`No valid matches in any event in ${year}.`);
-  } catch (err) {
-    console.error(err);
-    alert('Error loading match: ' + err.message);
-  }
-}
+    if(!match) throw new Error(`No valid matches in ${year}`);
 
-function resetUI() {
-  if (countdown) clearInterval(countdown);
-  ["timer", "meta", "match-info", "result-area"].forEach(id => document.getElementById(id).innerHTML = "");
+    currentMatch = match; answered=false;
+    showMatch(pickedEvent, match);
+  }catch(err){ alert("Error loading match: "+err.message); }
 }
-
-function showMatch(event, match) {
+function resetUI(){
+  if(countdown) clearInterval(countdown);
+  ["timer","meta","match-info","result-area"].forEach(id=>document.getElementById(id).innerHTML="");
+}
+function showMatch(event,match){
   document.getElementById("meta").textContent =
-    `${event.year} – ${event.name} – ${(match.comp_level?.toUpperCase() || "Unknown")} #${match.match_number}`;
+    `${event.year} – ${event.name} – ${(match.comp_level?.toUpperCase()||"Unknown")} #${match.match_number}`;
+
   const box = document.getElementById("match-info");
-  box.innerHTML = "";
-  ["red", "blue"].forEach(color => {
-    const teams = match.alliances[color].team_keys;
-    box.appendChild(renderAllianceCard(color, teams));
-    teams.forEach(async tk => {
-      const url = await getAvatar(tk, event.year);
-      const img = document.getElementById(`img-${tk}`);
-      if (url && img && img.dataset.loaded === "false") {
-        img.src = url;
-        img.dataset.loaded = "true";
-      }
+  box.innerHTML="";
+
+  ["red","blue"].forEach(color=>{
+    const teams=match.alliances[color].team_keys;
+    box.appendChild(renderCard(color,teams));
+    teams.forEach(async tk=>{
+      const url=await getAvatar(tk,event.year);
+      const img=document.getElementById(`img-${tk}`);
+      if(url && img && img.dataset.loaded==="false"){ img.src=url; img.dataset.loaded="true"; }
     });
   });
   startTimer();
 }
-
-function renderAllianceCard(color, teams) {
-  const html = teams.map(tk => `
+function renderCard(color,teams){
+  const html = teams.map(tk=>`
     <div class="team">
-      <img id="img-${tk}"
-           src="${PLACEHOLDER}"
-           data-loaded="false"
-           onerror="this.onerror=null;this.src='${PLACEHOLDER}';"
-           alt="${tk.slice(3)}">
+      <img id="img-${tk}" src="${PLACEHOLDER}" data-loaded="false"
+           onerror="this.onerror=null;this.src='${PLACEHOLDER}'" alt="${tk.slice(3)}">
       <span>${tk.slice(3)}</span>
     </div>`).join("");
-  const col = document.createElement("div");
-  col.className = "col-md-6";
-  col.innerHTML = `
+
+  const col=document.createElement("div");
+  col.className="col-md-6";
+  col.innerHTML=`
     <div class="card shadow-sm" data-color="${color}">
       <div class="card-body">
         <h4 class="card-title text-capitalize mb-3">${color} alliance</h4>
@@ -212,73 +196,43 @@ function renderAllianceCard(color, teams) {
   col.querySelector(".card").onclick = () => guess(color);
   return col;
 }
-
-function startTimer() {
-  let t = TIMER_S;
-  const timerElm = document.getElementById("timer");
-  timerElm.textContent = `${t}s`;
-  countdown = setInterval(() => {
-    if (--t <= 0) { clearInterval(countdown); guess(null, true); }
-    timerElm.textContent = `${t}s`;
-  }, 1000);
+function startTimer(){
+  let t=TIMER_S; const timer=document.getElementById("timer");
+  timer.textContent=`${t}s`;
+  countdown=setInterval(()=>{ if(--t<=0){clearInterval(countdown);guess(null,true);} timer.textContent=`${t}s`; },1000);
 }
-
-function guess(color, timeout = false) {
-  if (answered) return;
-  answered = true; if (countdown) clearInterval(countdown);
-  const win = currentMatch.winning_alliance;
-  document.querySelectorAll("#match-info .card")
-    .forEach(c => c.classList.add(c.getAttribute("data-color") === win ? "win" : "lose"));
-  let heading;
-  if (timeout) heading = "Timeout!";
-  else if (color === win) heading = "Correct!";
-  else heading = "Wrong!";
+function guess(color,timeout=false){
+  if(answered) return; answered=true; clearInterval(countdown);
+  const win=currentMatch.winning_alliance;
+  document.querySelectorAll("#match-info .card").forEach(c=>c.classList.add(c.getAttribute("data-color")===win?"win":"lose"));
+  const hdr = timeout ? "Timeout!" : (color===win?"Correct!":"Wrong!");
   document.getElementById("result-area").innerHTML = `
-    <h3>${heading}</h3>
+    <h3>${hdr}</h3>
     <p>Red: ${currentMatch.alliances.red.score} | Blue: ${currentMatch.alliances.blue.score}</p>
-    <a target="_blank" href="https://www.thebluealliance.com/match/${currentMatch.key}">
-      Match details & video
-    </a>`;
-  updateElo(color === win && !timeout);
+    <a target="_blank" href="https://www.thebluealliance.com/match/${currentMatch.key}">Match details & video</a>`;
+  updateElo(color===win && !timeout);
 }
 
-async function tba(ep) {
-  const res = await fetch(`${API_PREFIX}${ep}`);
-  if (!res.ok) throw new Error(`TBA ${res.status}`);
-  return res.json();
+/*** Blue Alliance helpers ***/
+async function tba(ep){ const r=await fetch(API_PREFIX+ep); if(!r.ok)throw new Error(r.status); return r.json(); }
+function getEvents(y){ if(eventsCache.has(y))return Promise.resolve(eventsCache.get(y)); return tba(`/events/${y}`).then(d=>{eventsCache.set(y,d);return d;}); }
+function getMatches(k){ if(matchesCache.has(k))return Promise.resolve(matchesCache.get(k)); return tba(`/event/${k}/matches`).then(d=>{matchesCache.set(k,d);return d;}); }
+async function getAvatar(team,year){
+  const key=`${team}-${year}`; if(avatarCache.has(key)) return avatarCache.get(key);
+  try{
+    const media=await tba(`/team/${team}/media/${year}`);
+    const a=media.find(m=>m.type==='avatar');
+    const url=a?.details?.base64Image?`data:image/png;base64,${a.details.base64Image}`:null;
+    avatarCache.set(key,url); return url;
+  }catch{ avatarCache.set(key,null); return null; }
 }
-function getEvents(year) {
-  if (eventsCache.has(year)) return Promise.resolve(eventsCache.get(year));
-  return tba(`/events/${year}`).then(d => { eventsCache.set(year, d); return d; });
-}
-function getMatches(eventKey) {
-  if (matchesCache.has(eventKey)) return Promise.resolve(matchesCache.get(eventKey));
-  return tba(`/event/${eventKey}/matches`).then(d => { matchesCache.set(eventKey, d); return d; });
-}
-async function getAvatar(teamKey, year) {
-  const key = `${teamKey}-${year}`;
-  if (avatarCache.has(key)) return avatarCache.get(key);
-  try {
-    const media = await tba(`/team/${teamKey}/media/${year}`);
-    const avatar = media.find(m => m.type === "avatar");
-    const url = avatar?.details?.base64Image
-      ? `data:image/png;base64,${avatar.details.base64Image}` : null;
-    avatarCache.set(key, url);
-    return url;
-  } catch {
-    avatarCache.set(key, null);
-    return null;
-  }
-}
-function randPick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-function shuffle(array) {
-  const a = array.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
+
+/*** Utils ***/
+const randPick=a=>a[Math.floor(Math.random()*a.length)];
+const randBetween=(min,max)=>Math.floor(Math.random()*(max-min+1))+min;
+function shuffle(arr){ const a=arr.slice(); for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
+
+} /* end afterFirebaseReady */
 </script>
 </body>
 </html>
