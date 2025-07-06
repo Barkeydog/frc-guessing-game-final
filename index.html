@@ -13,7 +13,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 
   <style>
-    body { padding-top: 4rem; }
+    body { padding-top:4rem; }
     .card { cursor:pointer; transition:transform .2s; }
     .card:hover { transform:scale(1.05); }
     .win  { background:#d4edda!important; }
@@ -58,13 +58,12 @@
 <script>
 /* ---------- STATIC CONFIG ---------- */
 const API_PREFIX  = "/.netlify/functions/tba?path=";
-const YEARS       = [2018,2019,2020,2022,2023,2024,2025];   // avatar-era years, 2021 excluded
-const LATEST_YEAR = 2025;
+const YEARS       = [2018,2019,2020,2022,2023,2024,2025]; // avatar-era, 2021 excluded
 const K           = 32;
 const TIMER_S     = 10;
 const PLACEHOLDER = "logo.png";
 
-/* ---------- Firebase CONFIG loaded securely ---------- */
+/* ---------- Firebase via Netlify function ---------- */
 let auth, db;
 fetch("/.netlify/functions/firebase-config")
   .then(r => r.json())
@@ -87,7 +86,7 @@ const signInBtn=document.getElementById("sign-in");
 const signOutBtn=document.getElementById("sign-out");
 const userInfo =document.getElementById("user-info");
 
-signInBtn.onclick = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(alert);
+signInBtn.onclick  = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(alert);
 signOutBtn.onclick = () => auth.signOut();
 
 auth.onAuthStateChanged(async user=>{
@@ -127,7 +126,7 @@ async function updateElo(correct){
   refreshLeaderboard();
 }
 
-/*** New match flow ***/
+/*** Game flow ***/
 document.getElementById("new-match").onclick = newMatch;
 async function newMatch(){
   resetUI();
@@ -143,6 +142,7 @@ async function newMatch(){
       if(val.length){ pickedEvent=ev; match=randPick(val); break; }
     }
     if(!match) throw new Error(`No valid matches in ${year}`);
+
     currentMatch=match; answered=false;
     showMatch(pickedEvent,match);
   }catch(err){ alert("Blue Alliance error: "+err.message); }
@@ -192,8 +192,7 @@ function renderCard(color,teams){
 
 /*** Timer & guess ***/
 function startTimer(){
-  let t=TIMER_S;
-  const timer=document.getElementById("timer");
+  let t=TIMER_S; const timer=document.getElementById("timer");
   timer.textContent=`${t}s`;
   countdown=setInterval(()=>{ if(--t<=0){clearInterval(countdown);guess(null,true);} timer.textContent=`${t}s`; },1000);
 }
@@ -215,23 +214,20 @@ async function tba(ep){ const r=await fetch(API_PREFIX+ep); if(!r.ok)throw new E
 function getEvents(y){ if(eventsCache.has(y))return Promise.resolve(eventsCache.get(y)); return tba(`/events/${y}`).then(d=>(eventsCache.set(y,d),d)); }
 function safeGetMatches(k){ if(matchesCache.has(k))return Promise.resolve(matchesCache.get(k)); return tba(`/event/${k}/matches`).then(d=>(matchesCache.set(k,d),d)).catch(()=>[]); }
 
-/*** Avatar with fallback to latest season ***/
+/*** Avatar – single-year lookup only ***/
 async function getAvatar(team,year){
   const key=`${team}-${year}`;
   if(avatarCache.has(key)) return avatarCache.get(key);
 
-  let url = await fetchAvatar(team,year);
-  if(!url && year!==LATEST_YEAR) url = await fetchAvatar(team,LATEST_YEAR);
+  let url=null;
+  try{
+    const media=await tba(`/team/${team}/media/${year}`);
+    const a=media.find(m=>m.type==='avatar');
+    url = a?.details?.base64Image
+          ? `data:image/png;base64,${a.details.base64Image}` : null;
+  }catch{ /* ignore */ }
 
   avatarCache.set(key,url); return url;
-}
-async function fetchAvatar(team,yr){
-  try{
-    const media=await tba(`/team/${team}/media/${yr}`);
-    const a=media.find(m=>m.type==='avatar');
-    return a?.details?.base64Image
-      ? `data:image/png;base64,${a.details.base64Image}` : null;
-  }catch{return null;}
 }
 
 /*** Utils ***/
