@@ -58,7 +58,7 @@
 <script>
 /* ---------- STATIC CONFIG ---------- */
 const API_PREFIX  = "/.netlify/functions/tba?path=";
-const YEARS       = [2018,2019,2020,2022,2023,2024,2025]; // avatar-era, 2021 excluded
+const YEARS       = [2018,2019,2020,2022,2023,2024,2025];   // 2021 excluded
 const K           = 32;
 const TIMER_S     = 10;
 const PLACEHOLDER = "logo.png";
@@ -131,17 +131,23 @@ document.getElementById("new-match").onclick = newMatch;
 async function newMatch(){
   resetUI();
   try{
-    const year   = randBetween(...YEARS);
-    const events = await getEvents(year);
-    const shuffled = shuffle(events.filter(e=>e.event_type<=1));
-    let match=null, pickedEvent=null;
+    const yearPool=shuffle(YEARS);          // shuffle years first
+    let pickedEvent=null, match=null;
 
-    for(const ev of shuffled){
-      const val=(await safeGetMatches(ev.key))
-                 .filter(m=>m.winning_alliance && m.comp_level);
-      if(val.length){ pickedEvent=ev; match=randPick(val); break; }
+    for(const year of yearPool){
+      const events=await getEvents(year);                             // no event_type filter
+      for(const ev of shuffle(events)){
+        const valid=(await safeGetMatches(ev.key))
+                    .filter(m=>m.winning_alliance && m.comp_level);
+        if(valid.length){
+          pickedEvent=ev; match=randPick(valid);
+          break;
+        }
+      }
+      if(match) break;   // stop once we found a valid event
     }
-    if(!match) throw new Error(`No valid matches in ${year}`);
+
+    if(!match) throw new Error("No valid matches found in any year");
 
     currentMatch=match; answered=false;
     showMatch(pickedEvent,match);
@@ -214,20 +220,15 @@ async function tba(ep){ const r=await fetch(API_PREFIX+ep); if(!r.ok)throw new E
 function getEvents(y){ if(eventsCache.has(y))return Promise.resolve(eventsCache.get(y)); return tba(`/events/${y}`).then(d=>(eventsCache.set(y,d),d)); }
 function safeGetMatches(k){ if(matchesCache.has(k))return Promise.resolve(matchesCache.get(k)); return tba(`/event/${k}/matches`).then(d=>(matchesCache.set(k,d),d)).catch(()=>[]); }
 
-/*** Avatar – single-year lookup only ***/
+/*** Avatar – single-year lookup ***/
 async function getAvatar(team,year){
-  const key=`${team}-${year}`;
-  if(avatarCache.has(key)) return avatarCache.get(key);
-
-  let url=null;
+  const key=`${team}-${year}`; if(avatarCache.has(key))return avatarCache.get(key);
   try{
     const media=await tba(`/team/${team}/media/${year}`);
     const a=media.find(m=>m.type==='avatar');
-    url = a?.details?.base64Image
-          ? `data:image/png;base64,${a.details.base64Image}` : null;
-  }catch{ /* ignore */ }
-
-  avatarCache.set(key,url); return url;
+    const url=a?.details?.base64Image?`data:image/png;base64,${a.details.base64Image}`:null;
+    avatarCache.set(key,url); return url;
+  }catch{ avatarCache.set(key,null); return null; }
 }
 
 /*** Utils ***/
